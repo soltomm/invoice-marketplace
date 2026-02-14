@@ -1,0 +1,47 @@
+services:
+  # Backend - Express API
+  - type: web
+    name: invoice-marketplace-api
+    runtime: node
+    region: oregon
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: CONTRACT_ADDRESS
+        value: "0xFce38951188089B7a351FF9BA40BFDbc80Ff7AFF"
+      - key: PLATFORM_PRIVATE_KEY
+        sync: false
+      - key: INVESTOR_PRIVATE_KEY
+        sync: false
+      - key: PAYMENT_TOKEN
+        value: "0x20C0000000000000000000000000000000000001"
+      - key: TEMPO_RPC_URL
+        value: "https://rpc.moderato.tempo.xyz"
+      - key: FRONTEND_URL
+        value: "https://invoice-marketplace-frontend.onrender.com"
+    healthCheckPath: /health
+
+  # Frontend - Next.js
+  - type: web
+    name: invoice-marketplace-frontend
+    runtime: node
+    region: oregon
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        value: "https://invoice-marketplace-api.onrender.com"
+      - key: NEXT_PUBLIC_PRIVY_APP_ID
+        sync: false
+      - key: NEXT_PUBLIC_CONTRACT_ADDRESS
+        value: "0xFce38951188089B7a351FF9BA40BFDbc80Ff7AFF"
+      - key: NEXT_PUBLIC_PAYMENT_TOKEN
+        value: "0x20C0000000000000000000000000000000000001"
