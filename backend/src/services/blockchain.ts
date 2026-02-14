@@ -72,7 +72,7 @@ export class BlockchainService {
         process.env.PLATFORM_PRIVATE_KEY!, // In production, user signs this
         this.provider
       );
-      const contractWithSigner = this.contract.connect(sellerSigner);
+      const contractWithSigner = this.contract.connect(sellerSigner) as ethers.Contract;
 
       const tx = await contractWithSigner.createInvoice(
         buyerAddress,
