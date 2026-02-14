@@ -157,6 +157,82 @@ export class BlockchainService {
   }
 
   /**
+   * Settle invoice — platform wallet pays faceValue in AlphaUSD to the investor
+   */
+  async settleInvoice(invoiceId: number): Promise<{ txHash: string }> {
+    try {
+      const invoice = await this.contract.getInvoice(invoiceId);
+      if (!invoice || Number(invoice.id) === 0) {
+        throw new Error('Invoice not found');
+      }
+      if (Number(invoice.status) !== 1) { // 1 = SOLD
+        throw new Error(`Invoice cannot be settled (status: ${invoice.status})`);
+      }
+
+      if (!process.env.PLATFORM_PRIVATE_KEY) {
+        throw new Error('PLATFORM_PRIVATE_KEY not configured');
+      }
+      const platformSigner = new ethers.Wallet(process.env.PLATFORM_PRIVATE_KEY, this.provider);
+
+      // Approve contract to spend faceValue in AlphaUSD
+      const paymentTokenAddress = process.env.PAYMENT_TOKEN || '0x20C0000000000000000000000000000000000001';
+      const erc20 = new ethers.Contract(
+        paymentTokenAddress,
+        [
+          'function approve(address spender, uint256 amount) returns (bool)',
+          'function allowance(address owner, address spender) view returns (uint256)',
+          'function balanceOf(address account) view returns (uint256)',
+        ],
+        platformSigner
+      );
+
+      const faceValue: bigint = invoice.faceValue;
+      const contractAddress = await this.contract.getAddress();
+
+      // Check balance
+      const balance: bigint = await erc20.balanceOf(platformSigner.address);
+      if (balance < faceValue) {
+        throw new Error(
+          `Insufficient AlphaUSD. Need ${ethers.formatUnits(faceValue, 6)}, have ${ethers.formatUnits(balance, 6)}`
+        );
+      }
+
+      // Approve if needed
+      const allowance: bigint = await erc20.allowance(platformSigner.address, contractAddress);
+      if (allowance < faceValue) {
+        const approveTx = await erc20.approve(contractAddress, faceValue);
+        await approveTx.wait();
+      }
+
+      // Call settleInvoice
+      const contractWithSigner = new ethers.Contract(
+        contractAddress,
+        this.contract.interface,
+        platformSigner
+      );
+      const tx = await contractWithSigner.settleInvoice(invoiceId);
+      console.log(`Settling invoice ${invoiceId}, tx: ${tx.hash}`);
+      const receipt = await tx.wait();
+      console.log(`Invoice ${invoiceId} settled successfully`);
+
+      return { txHash: receipt.hash };
+    } catch (error: any) {
+      console.error('Error settling invoice:', error);
+      throw new Error(error.reason || error.message || 'Failed to settle invoice');
+    }
+  }
+
+  /**
+   * Get platform wallet address derived from PLATFORM_PRIVATE_KEY
+   */
+  getPlatformWalletAddress(): string {
+    if (!process.env.PLATFORM_PRIVATE_KEY) {
+      throw new Error('PLATFORM_PRIVATE_KEY not configured');
+    }
+    return new ethers.Wallet(process.env.PLATFORM_PRIVATE_KEY).address;
+  }
+
+  /**
    * Get invoice by ID
    */
   async getInvoice(invoiceId: number): Promise<BlockchainInvoice | null> {

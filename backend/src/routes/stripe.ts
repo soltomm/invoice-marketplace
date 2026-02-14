@@ -1,4 +1,5 @@
 import express from 'express';
+import Stripe from 'stripe';
 import { StripeService } from '../services/stripe-service';
 import { BlockchainService } from '../services/blockchain';
 
@@ -150,7 +151,7 @@ router.post('/create-invoice', async (req, res) => {
     // Create on blockchain
     const result = await blockchainService.createInvoice(
       sellerAddress,
-      '0x0000000000000000000000000000000000000000', // Placeholder buyer address
+      blockchainService.getPlatformWalletAddress(), // Platform wallet acts as buyer for settlement
       stripeInvoice.amountDue,
       daysUntil,
       metadata
@@ -225,6 +226,61 @@ router.get('/mappings', (req, res) => {
   }));
   
   res.json({ success: true, mappings });
+});
+
+/**
+ * Stripe webhook — auto-settles blockchain invoices when Stripe invoices are paid
+ */
+router.post('/webhook', async (req, res) => {
+  const sig = req.headers['stripe-signature'] as string | undefined;
+
+  if (!sig) {
+    return res.status(400).send('Missing stripe-signature header');
+  }
+
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error('STRIPE_WEBHOOK_SECRET not configured');
+    return res.status(500).send('Webhook secret not configured');
+  }
+
+  let event: Stripe.Event;
+  try {
+    event = stripeService.constructWebhookEvent(req.body, sig, webhookSecret);
+  } catch (err: any) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'invoice.paid') {
+    const invoice = event.data.object as Stripe.Invoice;
+    const stripeInvoiceId = invoice.id;
+    console.log(`Stripe invoice paid: ${stripeInvoiceId}`);
+
+    const blockchainInvoiceId = invoiceMappings.get(stripeInvoiceId);
+    if (!blockchainInvoiceId) {
+      console.log(`Invoice ${stripeInvoiceId} not in blockchain mappings — skipping`);
+      return res.status(200).json({ received: true });
+    }
+
+    try {
+      const bcInvoice = await blockchainService.getInvoice(blockchainInvoiceId);
+      if (!bcInvoice || bcInvoice.status !== 1) { // 1 = SOLD
+        console.log(`Invoice ${blockchainInvoiceId} not in SOLD status (${bcInvoice?.status}) — skipping`);
+        return res.status(200).json({ received: true });
+      }
+
+      const result = await blockchainService.settleInvoice(blockchainInvoiceId);
+      console.log(`Settled invoice ${blockchainInvoiceId}, tx: ${result.txHash}`);
+      return res.status(200).json({ received: true, settled: true, txHash: result.txHash });
+    } catch (error: any) {
+      console.error(`Failed to settle invoice ${blockchainInvoiceId}:`, error.message);
+      // Return 200 to prevent Stripe from retrying
+      return res.status(200).json({ received: true, settled: false, error: error.message });
+    }
+  }
+
+  res.status(200).json({ received: true });
 });
 
 export default router;

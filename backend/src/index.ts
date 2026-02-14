@@ -16,6 +16,9 @@ app.use(cors({
   credentials: true,
 }));
 
+// Stripe webhooks need raw body for signature verification — must come BEFORE express.json()
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -46,6 +49,7 @@ app.get('/', (req, res) => {
         markPaid: 'POST /api/stripe/mark-paid',
         generateDemo: 'POST /api/stripe/demo/generate',
         mappings: 'GET /api/stripe/mappings',
+        webhook: 'POST /api/stripe/webhook (Stripe webhook)',
       },
       blockchain: {
         listedInvoices: 'GET /api/blockchain/invoices/listed',

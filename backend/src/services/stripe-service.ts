@@ -207,6 +207,17 @@ export class StripeService {
   }
 
   /**
+   * Construct and verify a Stripe webhook event
+   */
+  constructWebhookEvent(
+    payload: string | Buffer,
+    signature: string,
+    secret: string
+  ): Stripe.Event {
+    return this.stripe.webhooks.constructEvent(payload, signature, secret);
+  }
+
+  /**
    * Validate Stripe connection
    */
   async validateConnection(): Promise<boolean> {
