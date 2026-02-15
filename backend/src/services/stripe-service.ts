@@ -230,6 +230,157 @@ export class StripeService {
     }
   }
 
+  // ── Stripe Connect ──────────────────────────────────────
+
+  /**
+   * Create a Stripe Express connected account for a seller
+   */
+  async createConnectedAccount(
+    email: string,
+    walletAddress: string
+  ): Promise<{ accountId: string }> {
+    const account = await this.stripe.accounts.create({
+      type: 'express',
+      email,
+      metadata: { walletAddress },
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+    });
+    return { accountId: account.id };
+  }
+
+  /**
+   * Create an onboarding link for a connected account
+   */
+  async createAccountLink(
+    accountId: string,
+    refreshUrl: string,
+    returnUrl: string
+  ): Promise<{ url: string }> {
+    const link = await this.stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
+      type: 'account_onboarding',
+    });
+    return { url: link.url };
+  }
+
+  /**
+   * Check if a connected account has completed onboarding
+   */
+  async getAccountStatus(accountId: string): Promise<{
+    chargesEnabled: boolean;
+    detailsSubmitted: boolean;
+    email: string | null;
+  }> {
+    const account = await this.stripe.accounts.retrieve(accountId);
+    return {
+      chargesEnabled: account.charges_enabled ?? false,
+      detailsSubmitted: account.details_submitted ?? false,
+      email: account.email ?? null,
+    };
+  }
+
+  /**
+   * Get open invoices from a connected account
+   */
+  async getConnectedAccountInvoices(
+    accountId: string,
+    limit: number = 100
+  ): Promise<StripeInvoiceData[]> {
+    const invoices = await this.stripe.invoices.list(
+      { status: 'open', limit, expand: ['data.customer'] },
+      { stripeAccount: accountId }
+    );
+    return invoices.data.map(inv => this.formatInvoice(inv));
+  }
+
+  /**
+   * Get single invoice from a connected account
+   */
+  async getConnectedAccountInvoice(
+    accountId: string,
+    invoiceId: string
+  ): Promise<StripeInvoiceData> {
+    const invoice = await this.stripe.invoices.retrieve(
+      invoiceId,
+      { expand: ['customer'] },
+      { stripeAccount: accountId }
+    );
+    return this.formatInvoice(invoice);
+  }
+
+  /**
+   * Generate demo invoices on a connected account
+   */
+  async generateConnectedAccountDemoInvoices(accountId: string): Promise<StripeInvoiceData[]> {
+    const demoInvoices = [
+      { email: 'acme@example.com', name: 'Acme Corp', amount: 5000, days: 30, desc: 'Website Development' },
+      { email: 'techstart@example.com', name: 'TechStart Inc', amount: 12000, days: 45, desc: 'Mobile App Design' },
+      { email: 'globalco@example.com', name: 'Global Co', amount: 8500, days: 60, desc: 'Consulting Services' },
+    ];
+
+    const opts = { stripeAccount: accountId };
+
+    const results = await Promise.allSettled(
+      demoInvoices.map(async (demo) => {
+        // Get or create customer on connected account
+        const customers = await this.stripe.customers.list({ email: demo.email, limit: 1 }, opts);
+        let customerId: string;
+        if (customers.data.length > 0) {
+          customerId = customers.data[0].id;
+        } else {
+          const customer = await this.stripe.customers.create({
+            email: demo.email,
+            name: demo.name,
+          }, opts);
+          customerId = customer.id;
+        }
+
+        // Create invoice on connected account
+        const invoice = await this.stripe.invoices.create({
+          customer: customerId,
+          auto_advance: false,
+          collection_method: 'send_invoice',
+          days_until_due: demo.days,
+          expand: ['customer'],
+        }, opts);
+
+        await this.stripe.invoiceItems.create({
+          customer: customerId,
+          invoice: invoice.id,
+          amount: Math.round(demo.amount * 100),
+          currency: 'usd',
+          description: demo.desc,
+        }, opts);
+
+        const finalized = await this.stripe.invoices.finalizeInvoice(invoice.id, {
+          expand: ['customer'],
+        }, opts);
+
+        return this.formatInvoice(finalized);
+      })
+    );
+
+    const created: StripeInvoiceData[] = [];
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        created.push(result.value);
+      } else {
+        console.error('Failed to create connected demo invoice:', (result.reason as Error).message);
+      }
+    });
+
+    if (created.length === 0) {
+      throw new Error('Failed to generate any demo invoices on connected account');
+    }
+
+    return created;
+  }
+
   /**
    * Generate test invoices for demo
    */

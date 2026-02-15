@@ -41,16 +41,57 @@ export async function getStripeInvoice(id: string): Promise<StripeInvoice> {
 
 export async function createBlockchainInvoice(
   stripeInvoiceId: string,
-  sellerAddress: string
+  sellerAddress: string,
+  connectedAccountId?: string
 ): Promise<{ txHash: string; blockchainInvoiceId: number }> {
   return fetchApi("/api/stripe/create-invoice", {
     method: "POST",
-    body: JSON.stringify({ stripeInvoiceId, sellerAddress }),
+    body: JSON.stringify({ stripeInvoiceId, sellerAddress, connectedAccountId }),
   })
 }
 
 export async function generateDemoInvoices(): Promise<{ message: string }> {
   return fetchApi("/api/stripe/demo/generate", { method: "POST" })
+}
+
+// ── Stripe Connect ──────────────────────────────────────
+
+export async function connectStripeAccount(
+  walletAddress: string,
+  email: string
+): Promise<{ url?: string; alreadyConnected?: boolean; accountId: string }> {
+  return fetchApi("/api/stripe/connect/onboard", {
+    method: "POST",
+    body: JSON.stringify({ walletAddress, email }),
+  })
+}
+
+export async function getStripeConnectStatus(
+  walletAddress: string
+): Promise<{
+  connected: boolean
+  detailsSubmitted?: boolean
+  accountId?: string
+  email?: string
+}> {
+  return fetchApi(`/api/stripe/connect/status/${walletAddress}`)
+}
+
+export async function getConnectedStripeInvoices(
+  walletAddress: string
+): Promise<StripeInvoice[]> {
+  const data = await fetchApi<{ success: boolean; invoices: StripeInvoice[] }>(
+    `/api/stripe/connect/invoices/${walletAddress}`
+  )
+  return data.invoices
+}
+
+export async function generateConnectedDemoInvoices(
+  walletAddress: string
+): Promise<{ message: string }> {
+  return fetchApi(`/api/stripe/connect/demo/generate/${walletAddress}`, {
+    method: "POST",
+  })
 }
 
 // ── Blockchain ──────────────────────────────────────────

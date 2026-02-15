@@ -54,6 +54,10 @@ app.get('/', (req, res) => {
         generateDemo: 'POST /api/stripe/demo/generate',
         mappings: 'GET /api/stripe/mappings',
         webhook: 'POST /api/stripe/webhook (Stripe webhook)',
+        connectOnboard: 'POST /api/stripe/connect/onboard',
+        connectStatus: 'GET /api/stripe/connect/status/:walletAddress',
+        connectInvoices: 'GET /api/stripe/connect/invoices/:walletAddress',
+        connectRefreshLink: 'POST /api/stripe/connect/refresh-link',
       },
       blockchain: {
         listedInvoices: 'GET /api/blockchain/invoices/listed',

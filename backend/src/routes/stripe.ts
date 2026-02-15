@@ -7,8 +7,9 @@ const router = express.Router();
 const stripeService = new StripeService();
 const blockchainService = new BlockchainService();
 
-// Store for invoice mappings (in production, use a database)
+// In-memory stores (in production, use a database)
 const invoiceMappings = new Map<string, number>(); // stripeInvoiceId -> blockchainInvoiceId
+const connectedAccounts = new Map<string, string>(); // walletAddress (lowercase) -> stripeAccountId
 
 /**
  * Test Stripe connection
@@ -105,7 +106,7 @@ router.get('/invoices/:id', async (req, res) => {
  */
 router.post('/create-invoice', async (req, res) => {
   try {
-    const { stripeInvoiceId, sellerAddress } = req.body;
+    const { stripeInvoiceId, sellerAddress, connectedAccountId } = req.body;
 
     if (!stripeInvoiceId || !sellerAddress) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -113,14 +114,16 @@ router.post('/create-invoice', async (req, res) => {
 
     // Check if already on blockchain
     if (invoiceMappings.has(stripeInvoiceId)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invoice already on blockchain',
         blockchainId: invoiceMappings.get(stripeInvoiceId)
       });
     }
 
-    // Fetch Stripe invoice details
-    const stripeInvoice = await stripeService.getInvoice(stripeInvoiceId);
+    // Fetch Stripe invoice details (from connected account if provided)
+    const stripeInvoice = connectedAccountId
+      ? await stripeService.getConnectedAccountInvoice(connectedAccountId, stripeInvoiceId)
+      : await stripeService.getInvoice(stripeInvoiceId);
 
     // Validate invoice is open (unpaid)
     if (stripeInvoice.status !== 'open') {
@@ -228,6 +231,182 @@ router.get('/mappings', (req, res) => {
   res.json({ success: true, mappings });
 });
 
+// ── Stripe Connect ──────────────────────────────────────
+
+/**
+ * Start Stripe Connect onboarding for a seller
+ */
+router.post('/connect/onboard', async (req, res) => {
+  try {
+    const { walletAddress, email } = req.body;
+    if (!walletAddress || !email) {
+      return res.status(400).json({ error: 'Missing walletAddress or email' });
+    }
+
+    const key = walletAddress.toLowerCase();
+
+    // Check if already connected
+    const existingAccountId = connectedAccounts.get(key);
+    if (existingAccountId) {
+      const status = await stripeService.getAccountStatus(existingAccountId);
+      if (status.chargesEnabled) {
+        return res.json({ success: true, alreadyConnected: true, accountId: existingAccountId });
+      }
+      // Not fully onboarded — generate a new link
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const link = await stripeService.createAccountLink(
+        existingAccountId,
+        `${frontendUrl}/dashboard?connect=refresh`,
+        `${frontendUrl}/dashboard?connect=success`
+      );
+      return res.json({ success: true, url: link.url, accountId: existingAccountId });
+    }
+
+    // Create new connected account
+    const { accountId } = await stripeService.createConnectedAccount(email, walletAddress);
+    connectedAccounts.set(key, accountId);
+
+    // Generate onboarding link
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const link = await stripeService.createAccountLink(
+      accountId,
+      `${frontendUrl}/dashboard?connect=refresh`,
+      `${frontendUrl}/dashboard?connect=success`
+    );
+
+    res.json({ success: true, url: link.url, accountId });
+  } catch (error: any) {
+    console.error('Connect onboard error:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to start Stripe Connect onboarding' });
+  }
+});
+
+/**
+ * Get Stripe Connect status for a wallet address
+ */
+router.get('/connect/status/:walletAddress', async (req, res) => {
+  try {
+    const key = req.params.walletAddress.toLowerCase();
+    const accountId = connectedAccounts.get(key);
+
+    if (!accountId) {
+      return res.json({ success: true, connected: false });
+    }
+
+    const status = await stripeService.getAccountStatus(accountId);
+    res.json({
+      success: true,
+      connected: status.chargesEnabled,
+      detailsSubmitted: status.detailsSubmitted,
+      accountId,
+      email: status.email,
+    });
+  } catch (error: any) {
+    console.error('Connect status error:', error);
+    res.status(500).json({ error: 'Failed to check connect status' });
+  }
+});
+
+/**
+ * Get invoices from a seller's connected Stripe account
+ */
+router.get('/connect/invoices/:walletAddress', async (req, res) => {
+  try {
+    const key = req.params.walletAddress.toLowerCase();
+    const accountId = connectedAccounts.get(key);
+
+    if (!accountId) {
+      return res.status(400).json({ error: 'No connected Stripe account for this wallet' });
+    }
+
+    const stripeInvoices = await stripeService.getConnectedAccountInvoices(accountId);
+
+    const invoices = stripeInvoices.map(inv => {
+      const dueDate = inv.dueDate ? new Date(inv.dueDate * 1000) : new Date();
+      const daysUntil = Math.ceil(
+        (dueDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+      );
+
+      return {
+        stripeId: inv.id,
+        invoiceNumber: inv.number,
+        customerName: inv.customerName || inv.customerEmail || 'Unknown',
+        customerEmail: inv.customerEmail,
+        amount: inv.amountDue,
+        currency: inv.currency,
+        dueDate: dueDate.toISOString(),
+        daysUntilDue: daysUntil > 0 ? daysUntil : 0,
+        isPastDue: daysUntil < 0,
+        description: inv.description || inv.lines[0]?.description || 'No description',
+        status: inv.status,
+        isOnBlockchain: invoiceMappings.has(inv.id),
+        blockchainId: invoiceMappings.get(inv.id),
+        connectedAccountId: accountId,
+        lines: inv.lines,
+      };
+    });
+
+    res.json({ success: true, invoices });
+  } catch (error: any) {
+    console.error('Connect invoices error:', error);
+    res.status(500).json({ error: 'Failed to fetch invoices from connected account' });
+  }
+});
+
+/**
+ * Generate demo invoices on a connected account
+ */
+router.post('/connect/demo/generate/:walletAddress', async (req, res) => {
+  try {
+    const key = req.params.walletAddress.toLowerCase();
+    const accountId = connectedAccounts.get(key);
+
+    if (!accountId) {
+      return res.status(400).json({ error: 'No connected Stripe account for this wallet' });
+    }
+
+    const invoices = await stripeService.generateConnectedAccountDemoInvoices(accountId);
+    res.json({
+      success: true,
+      message: `Generated ${invoices.length} demo invoices on connected account`,
+      invoices,
+    });
+  } catch (error: any) {
+    console.error('Connect demo generate error:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to generate demo invoices' });
+  }
+});
+
+/**
+ * Regenerate onboarding link (if expired)
+ */
+router.post('/connect/refresh-link', async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'Missing walletAddress' });
+    }
+
+    const key = walletAddress.toLowerCase();
+    const accountId = connectedAccounts.get(key);
+    if (!accountId) {
+      return res.status(400).json({ error: 'No connected account found — start onboarding first' });
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const link = await stripeService.createAccountLink(
+      accountId,
+      `${frontendUrl}/dashboard?connect=refresh`,
+      `${frontendUrl}/dashboard?connect=success`
+    );
+
+    res.json({ success: true, url: link.url });
+  } catch (error: any) {
+    console.error('Connect refresh-link error:', error);
+    res.status(500).json({ error: 'Failed to generate onboarding link' });
+  }
+});
+
 /**
  * Stripe webhook — auto-settles blockchain invoices when Stripe invoices are paid
  */
@@ -250,6 +429,12 @@ router.post('/webhook', async (req, res) => {
   } catch (err: any) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Log connected account info if present
+  const connectedAccountEventId = (event as any).account as string | undefined;
+  if (connectedAccountEventId) {
+    console.log(`Webhook from connected account: ${connectedAccountEventId}`);
   }
 
   if (event.type === 'invoice.paid') {

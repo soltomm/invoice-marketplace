@@ -12,6 +12,7 @@ export interface StripeInvoice {
   status: string
   isOnBlockchain: boolean
   blockchainId?: number
+  connectedAccountId?: string
   lines: Array<{ description: string; amount: number; quantity: number }>
 }
 

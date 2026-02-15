@@ -57,7 +57,7 @@ export function CreateListingDialog({
     setError("")
 
     try {
-      await createBlockchainInvoice(invoice.stripeId, walletAddress)
+      await createBlockchainInvoice(invoice.stripeId, walletAddress, invoice.connectedAccountId)
       onSuccess()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create listing")
