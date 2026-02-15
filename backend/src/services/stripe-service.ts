@@ -314,6 +314,29 @@ export class StripeService {
   }
 
   /**
+   * Transfer funds from a connected account to the platform (account debit).
+   * Uses Stripe Connect account debit: creates a charge with the connected
+   * account ID as the source, which pulls funds from their balance to the platform.
+   * Requires: Express/Custom account, same region, sufficient balance.
+   */
+  async transferFromConnectedAccount(
+    connectedAccountId: string,
+    amountInDollars: number,
+    invoiceDescription: string
+  ): Promise<{ chargeId: string }> {
+    const amountCents = Math.round(amountInDollars * 100);
+
+    const charge = await this.stripe.charges.create({
+      amount: amountCents,
+      currency: 'usd',
+      source: connectedAccountId,
+      description: `Invoice settlement: ${invoiceDescription}`,
+    });
+
+    return { chargeId: charge.id };
+  }
+
+  /**
    * Generate demo invoices on a connected account
    */
   async generateConnectedAccountDemoInvoices(accountId: string): Promise<StripeInvoiceData[]> {

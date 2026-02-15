@@ -8,7 +8,13 @@ const stripeService = new StripeService();
 const blockchainService = new BlockchainService();
 
 // In-memory stores (in production, use a database)
-const invoiceMappings = new Map<string, number>(); // stripeInvoiceId -> blockchainInvoiceId
+interface InvoiceMapping {
+  blockchainInvoiceId: number;
+  connectedAccountId?: string; // Stripe connected account that owns this invoice
+  amountDue: number;           // Invoice amount in dollars (for fiat transfer)
+  description: string;         // Invoice description for transfer reference
+}
+const invoiceMappings = new Map<string, InvoiceMapping>(); // stripeInvoiceId -> mapping
 const connectedAccounts = new Map<string, string>(); // walletAddress (lowercase) -> stripeAccountId
 
 /**
@@ -53,7 +59,7 @@ router.get('/invoices', async (req, res) => {
         description: inv.description || inv.lines[0]?.description || 'No description',
         status: inv.status,
         isOnBlockchain: invoiceMappings.has(inv.id),
-        blockchainId: invoiceMappings.get(inv.id),
+        blockchainId: invoiceMappings.get(inv.id)?.blockchainInvoiceId,
         lines: inv.lines,
       };
     });
@@ -92,7 +98,7 @@ router.get('/invoices/:id', async (req, res) => {
         status: invoice.status,
         lines: invoice.lines,
         isOnBlockchain: invoiceMappings.has(invoice.id),
-        blockchainId: invoiceMappings.get(invoice.id),
+        blockchainId: invoiceMappings.get(invoice.id)?.blockchainInvoiceId,
       },
     });
   } catch (error: any) {
@@ -116,7 +122,7 @@ router.post('/create-invoice', async (req, res) => {
     if (invoiceMappings.has(stripeInvoiceId)) {
       return res.status(400).json({
         error: 'Invoice already on blockchain',
-        blockchainId: invoiceMappings.get(stripeInvoiceId)
+        blockchainId: invoiceMappings.get(stripeInvoiceId)?.blockchainInvoiceId,
       });
     }
 
@@ -160,8 +166,13 @@ router.post('/create-invoice', async (req, res) => {
       metadata
     );
 
-    // Store mapping
-    invoiceMappings.set(stripeInvoiceId, result.invoiceId);
+    // Store mapping (including connected account for fiat transfer on settlement)
+    invoiceMappings.set(stripeInvoiceId, {
+      blockchainInvoiceId: result.invoiceId,
+      connectedAccountId: connectedAccountId || undefined,
+      amountDue: stripeInvoice.amountDue,
+      description: metadata.invoiceNumber || stripeInvoiceId,
+    });
 
     res.json({
       success: true,
@@ -223,9 +234,11 @@ router.post('/demo/generate', async (req, res) => {
  * Get invoice mappings (Stripe ID to Blockchain ID)
  */
 router.get('/mappings', (req, res) => {
-  const mappings = Array.from(invoiceMappings.entries()).map(([stripeId, blockchainId]) => ({
+  const mappings = Array.from(invoiceMappings.entries()).map(([stripeId, mapping]) => ({
     stripeId,
-    blockchainId,
+    blockchainId: mapping.blockchainInvoiceId,
+    connectedAccountId: mapping.connectedAccountId,
+    amountDue: mapping.amountDue,
   }));
   
   res.json({ success: true, mappings });
@@ -340,7 +353,7 @@ router.get('/connect/invoices/:walletAddress', async (req, res) => {
         description: inv.description || inv.lines[0]?.description || 'No description',
         status: inv.status,
         isOnBlockchain: invoiceMappings.has(inv.id),
-        blockchainId: invoiceMappings.get(inv.id),
+        blockchainId: invoiceMappings.get(inv.id)?.blockchainInvoiceId,
         connectedAccountId: accountId,
         lines: inv.lines,
       };
@@ -442,11 +455,13 @@ router.post('/webhook', async (req, res) => {
     const stripeInvoiceId = invoice.id;
     console.log(`Stripe invoice paid: ${stripeInvoiceId}`);
 
-    const blockchainInvoiceId = invoiceMappings.get(stripeInvoiceId);
-    if (!blockchainInvoiceId) {
+    const mapping = invoiceMappings.get(stripeInvoiceId);
+    if (!mapping) {
       console.log(`Invoice ${stripeInvoiceId} not in blockchain mappings — skipping`);
       return res.status(200).json({ received: true });
     }
+
+    const { blockchainInvoiceId, connectedAccountId, amountDue, description } = mapping;
 
     try {
       const bcInvoice = await blockchainService.getInvoice(blockchainInvoiceId);
@@ -455,6 +470,23 @@ router.post('/webhook', async (req, res) => {
         return res.status(200).json({ received: true });
       }
 
+      // Step 1: Transfer fiat from seller's connected account to platform
+      if (connectedAccountId) {
+        try {
+          const transfer = await stripeService.transferFromConnectedAccount(
+            connectedAccountId,
+            amountDue,
+            description
+          );
+          console.log(`Transferred $${amountDue} from ${connectedAccountId} to platform: ${transfer.chargeId}`);
+        } catch (transferError: any) {
+          console.error(`Fiat transfer failed for ${connectedAccountId}:`, transferError.message);
+          // Continue with blockchain settlement even if fiat transfer fails
+          // In production, you'd want to handle this more carefully
+        }
+      }
+
+      // Step 2: Settle on blockchain (platform sends faceValue in AlphaUSD to investor)
       const result = await blockchainService.settleInvoice(blockchainInvoiceId);
       console.log(`Settled invoice ${blockchainInvoiceId}, tx: ${result.txHash}`);
       return res.status(200).json({ received: true, settled: true, txHash: result.txHash });

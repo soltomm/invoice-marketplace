@@ -159,6 +159,24 @@ router.post('/buy', async (req, res) => {
 });
 
 /**
+ * Get AlphaUSD balance for an address
+ */
+router.get('/balance/:address', async (req, res) => {
+  try {
+    const balance = await blockchainService.getBalance(req.params.address);
+    res.json({
+      success: true,
+      address: req.params.address,
+      balance,
+      token: 'AlphaUSD',
+    });
+  } catch (error) {
+    console.error('Error fetching balance:', error);
+    res.status(500).json({ error: 'Failed to fetch balance' });
+  }
+});
+
+/**
  * Get contract stats
  */
 router.get('/stats', async (req, res) => {

@@ -329,6 +329,27 @@ export class BlockchainService {
   }
 
   /**
+   * Get AlphaUSD balance for an address
+   */
+  async getBalance(address: string): Promise<string> {
+    const paymentTokenAddress = process.env.PAYMENT_TOKEN || '0x20C0000000000000000000000000000000000001';
+    const erc20 = new ethers.Contract(
+      paymentTokenAddress,
+      ['function balanceOf(address account) view returns (uint256)'],
+      this.provider
+    );
+    const balance: bigint = await erc20.balanceOf(address);
+    return ethers.formatUnits(balance, 6);
+  }
+
+  /**
+   * Get the contract address
+   */
+  getContractAddress(): string {
+    return process.env.CONTRACT_ADDRESS || '';
+  }
+
+  /**
    * Listen for invoice events
    */
   onInvoiceCreated(callback: (invoiceId: number, seller: string, buyer: string) => void) {
