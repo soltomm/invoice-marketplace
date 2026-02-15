@@ -1,102 +1,105 @@
-# 🚀 Invoice Marketplace - Complete Platform
+# Invoice Marketplace
 
-Blockchain-based invoice factoring marketplace with Stripe integration.
+Blockchain-based invoice factoring platform. Sellers list unpaid Stripe invoices, investors buy them at a discount, and settlement happens automatically when the customer pays.
 
-## 📋 What This Is
-
-A platform where:
-- **Sellers**: Upload invoices from Stripe and get instant cash (minus small discount)
-- **Investors**: Buy invoices and earn 10-15% APY when they're settled
-- **Built on Tempo**: For instant settlement and sub-millidollar fees
-
-## 🏗️ Architecture
+## How It Works
 
 ```
-QuickBooks (Invoices) 
-    ↓ OAuth + API
-Express Backend
-    ↓ ethers.js
-Tempo Blockchain (Smart Contracts)
-    ↓ Privy
-Next.js Frontend
+Seller connects Stripe account (Express)
+    |
+Seller lists unpaid invoice on blockchain
+    |
+Investor buys invoice at discount (pays in AlphaUSD stablecoin)
+    |
+Seller receives stablecoin instantly
+    |
+Customer pays Stripe invoice (fiat)
+    |
+Webhook fires -> platform debits seller's Stripe balance
+                -> platform settles on-chain (investor gets faceValue in AlphaUSD)
 ```
 
-## 📁 Project Structure
+### Economics
+
+- **Base APY**: 12% (configurable in smart contract)
+- **Platform fee**: 0.5% on each purchase
+- Example: $10,000 invoice due in 60 days
+  - Discount: ~$197 (1.97%)
+  - Seller gets: $9,803 instantly in stablecoin
+  - Investor pays: $9,803
+  - Investor receives: $10,000 at settlement
+  - Investor profit: $197 in 60 days = 12% APY
+
+## Architecture
+
+```
+Stripe (Connected Accounts)     Tempo Blockchain
+        |                              |
+        v                              v
+   Express Backend  <----------->  InvoiceMarket.sol
+   (Node.js / TS)                  (Solidity)
+        |
+        v
+   Next.js Frontend
+   (Privy wallet auth)
+```
+
+## Project Structure
 
 ```
 invoice-marketplace/
-├── contracts/          # Solidity smart contracts (Foundry)
-├── backend/           # Express API (QuickBooks + Blockchain)
-└── frontend/          # Next.js app (coming next)
+├── contracts/                # Solidity smart contracts (Foundry)
+│   ├── src/InvoiceMarket.sol
+│   ├── test/InvoiceMarket.t.sol
+│   └── script/Deploy.s.sol
+├── backend/                  # Express API
+│   └── src/
+│       ├── index.ts
+│       ├── routes/
+│       │   ├── stripe.ts         # Stripe + Connect + webhook
+│       │   └── blockchain.ts     # On-chain queries + buy
+│       └── services/
+│           ├── stripe-service.ts  # Stripe API wrapper
+│           └── blockchain.ts      # ethers.js contract interaction
+└── frontend/                 # Next.js app
+    ├── app/
+    │   ├── page.tsx              # Landing
+    │   ├── dashboard/page.tsx    # Seller dashboard
+    │   └── marketplace/page.tsx  # Investor marketplace
+    ├── components/
+    └── lib/
+        ├── api.ts                # Backend API client
+        └── types.ts
 ```
 
-## 🚀 Quick Start (48-Hour Build)
-
-### Day 1: Saturday
-
-**Morning (4 hours): Smart Contracts**
-```bash
-cd contracts
-forge install
-forge test
-forge script script/Deploy.s.sol --rpc-url $TEMPO_RPC_URL --broadcast
-# Save contract address!
-```
-
-**Afternoon (4 hours): Backend**
-```bash
-cd backend
-npm install
-# Configure .env with QuickBooks credentials
-npm run dev
-```
-
-**Evening (4 hours): Frontend Setup**
-```bash
-cd frontend
-npm install
-# Configure .env with Privy App ID
-npm run dev
-```
-
-### Day 2: Sunday
-
-**Morning-Afternoon (8 hours)**: Build frontend pages, integrate everything
-**Evening (4 hours)**: Demo video, pitch deck, testing
-
-## 📦 Installation
+## Setup
 
 ### Prerequisites
 
 - Node.js 18+
-- Foundry (Tempo fork): `foundryup -n tempo`
-- QuickBooks Developer account
-- Privy account (for wallet auth)
-- Tempo testnet funds
+- Foundry with Tempo support (`foundryup -n tempo`)
+- Stripe account (free, test mode)
+- Wallet with Tempo testnet funds
 
 ### 1. Smart Contracts
 
 ```bash
 cd contracts
 
-# Install dependencies
 forge install OpenZeppelin/openzeppelin-contracts --no-commit
 forge install foundry-rs/forge-std --no-commit
-
-# Create .env
-echo "PRIVATE_KEY=your_key" > .env
-echo "TEMPO_RPC_URL=https://rpc.moderato.tempo.xyz" >> .env
 
 # Test
 forge test -vvv
 
-# Deploy
+# Deploy to Tempo testnet
 forge script script/Deploy.s.sol:DeployScript \
-  --rpc-url $TEMPO_RPC_URL \
+  --rpc-url https://rpc.moderato.tempo.xyz \
   --private-key $PRIVATE_KEY \
   --broadcast
 
-# Copy ABI
+# Save the contract address from the output
+# Copy ABI to backend
 cat out/InvoiceMarket.sol/InvoiceMarket.json | jq .abi > ../backend/src/abi/InvoiceMarket.json
 ```
 
@@ -104,199 +107,133 @@ cat out/InvoiceMarket.sol/InvoiceMarket.json | jq .abi > ../backend/src/abi/Invo
 
 ```bash
 cd backend
-
-# Install
 npm install
 
-# Configure
-cp .env.example .env
-# Edit .env with:
-# - QB credentials (from developer.intuit.com)
-# - Contract address (from deployment)
-# - Private key
+# Create .env
+cat > .env << EOF
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+CONTRACT_ADDRESS=0x...
+PLATFORM_PRIVATE_KEY=0x...
+TEMPO_RPC_URL=https://rpc.moderato.tempo.xyz
+FRONTEND_URL=http://localhost:3000
+EOF
 
-# Run
 npm run dev
+# Server starts on port 4000
 ```
 
-### 3. Frontend (Instructions provided separately)
+### 3. Frontend
 
-## 🔑 Getting QuickBooks Credentials
+```bash
+cd frontend
+npm install
 
-1. Go to https://developer.intuit.com
-2. Click "Create an app"
-3. Choose "QuickBooks Online and Payments"
-4. Get your Client ID and Client Secret
-5. Add redirect URI: `http://localhost:4000/api/quickbooks/callback`
-6. Create sandbox company for testing
+# Create .env.local
+cat > .env.local << EOF
+NEXT_PUBLIC_API_URL=http://localhost:4000
+NEXT_PUBLIC_PRIVY_APP_ID=your_privy_app_id
+EOF
 
-## 🎯 Demo Flow
+npm run dev
+# App starts on port 3000
+```
 
-### Setup (3 wallets needed)
+### 4. Stripe Webhook (local development)
 
-- **Wallet 1 (You)**: Seller/Freelancer
-- **Wallet 2 (Judge)**: Investor
-- **Wallet 3 (Judge)**: Buyer/Client
+```bash
+# Install Stripe CLI, then:
+stripe listen --forward-to localhost:4000/api/stripe/webhook
+# Copy the webhook signing secret to .env as STRIPE_WEBHOOK_SECRET
+```
 
-### Act 1: Connect QuickBooks
+## Deployment (Render)
 
-1. Click "Connect QuickBooks"
-2. OAuth flow → Authorize
-3. Return to dashboard
+### Backend
+- Deploy as a Web Service
+- Set all env vars from `.env`
+- Build command: `npm run build`
+- Start command: `npm start`
 
-### Act 2: Sync & Create Invoice
+### Frontend
+- Deploy as a Static Site or Web Service
+- Set `NEXT_PUBLIC_API_URL` to your backend Render URL
+- Build command: `npm run build`
+- Start command: `npm start`
 
-1. Click "Sync Invoices"
-2. See invoices from QuickBooks
-3. Select one: e.g., "$10,000 due in 60 days"
-4. Click "Get Cash Now"
-5. Invoice created on blockchain
+### Stripe Webhook (production)
+1. Go to Stripe Dashboard > Developers > Webhooks
+2. Add endpoint: `https://<backend>.onrender.com/api/stripe/webhook`
+3. Select event: `invoice.paid`
+4. Enable **"Listen to events on Connected accounts"**
+5. Copy signing secret to `STRIPE_WEBHOOK_SECRET` env var in Render
 
-### Act 3: Investor Buys
+## API Endpoints
 
-1. Switch to marketplace view
-2. See invoice listed
-3. Shows: "11.5% APY - Get $10,000 for $9,850"
-4. Click "Buy Invoice"
-5. Investor pays $9,850
+### Stripe
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/stripe/status` | Check Stripe connection |
+| GET | `/api/stripe/invoices` | List platform open invoices |
+| GET | `/api/stripe/invoices/:id` | Get specific invoice |
+| POST | `/api/stripe/create-invoice` | List invoice on blockchain |
+| POST | `/api/stripe/demo/generate` | Generate test invoices |
+| GET | `/api/stripe/mappings` | Stripe-to-blockchain ID mappings |
+| POST | `/api/stripe/webhook` | Stripe webhook (auto-settle) |
 
-### Act 4: Settlement
+### Stripe Connect
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/stripe/connect/onboard` | Start seller onboarding |
+| GET | `/api/stripe/connect/status/:wallet` | Check connection status |
+| GET | `/api/stripe/connect/invoices/:wallet` | Seller's Stripe invoices |
+| POST | `/api/stripe/connect/demo/generate/:wallet` | Generate demo invoices on connected account |
+| POST | `/api/stripe/connect/refresh-link` | Regenerate onboarding link |
 
-1. 60 days later (fast-forward on testnet)
-2. Buyer pays $10,000
-3. Investor receives $10,000
-4. Profit: $150 in 60 days = 11.5% APY
+### Blockchain
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/blockchain/invoices/listed` | Marketplace listings |
+| GET | `/api/blockchain/invoices/:id` | Invoice details + APY |
+| GET | `/api/blockchain/invoices/user/:address` | User's invoices |
+| POST | `/api/blockchain/calculate-discount` | Price calculator |
+| POST | `/api/blockchain/buy` | Buy an invoice |
+| GET | `/api/blockchain/balance/:address` | AlphaUSD balance |
+| GET | `/api/blockchain/stats` | Platform stats |
 
-## 💰 Economics
+## Smart Contract
 
-### Example Invoice
+**Address**: `0xFce38951188089B7a351FF9BA40BFDbc80Ff7AFF` (Tempo Moderato testnet)
 
-- Face value: $10,000
-- Due in: 60 days
-- Discount: ~2% ($200)
-- Seller gets: $9,800 instantly
-- Investor pays: $9,800
-- Investor gets: $10,000 in 60 days
-- Investor APY: 12.2%
-- Platform fee: 0.5% ($50)
+**Payment token**: AlphaUSD at `0x20C0000000000000000000000000000000000001` (6 decimals)
 
-## 📊 Tech Stack
+### Invoice States
+| Status | Value | Description |
+|--------|-------|-------------|
+| LISTED | 0 | Available for purchase |
+| SOLD | 1 | Bought by investor, awaiting settlement |
+| SETTLED | 2 | Customer paid, investor received faceValue |
+| CANCELLED | 3 | Cancelled by seller before sale |
+
+## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
 | Smart Contracts | Solidity 0.8.20, Foundry |
 | Blockchain | Tempo (EVM-compatible L1) |
 | Backend | Node.js, Express, TypeScript |
-| Integration | QuickBooks OAuth, intuit-oauth |
+| Stripe | Invoices API, Connect (Express), Webhooks |
 | Blockchain Client | ethers.js v6 |
 | Frontend | Next.js 14, TypeScript |
 | Wallet Auth | Privy |
-| UI | Tailwind CSS, shadcn/ui |
-| Session | express-session (in-memory) |
+| UI | Tailwind CSS |
 
-## 🧪 Testing
+## Key Limitations (Demo)
 
-### Smart Contracts
+- **Invoice mappings are in-memory**: The `stripeInvoiceId -> blockchainInvoiceId` mapping is lost on backend restart. The full list/buy/pay/settle flow must happen in one session. Production would use a database.
+- **Connected account lookup persists**: The wallet-to-Stripe-account mapping is recovered from Stripe API metadata on restart.
+- **Single platform wallet**: All blockchain operations use `PLATFORM_PRIVATE_KEY`. Production would have users sign their own transactions.
 
-```bash
-cd contracts
-forge test -vvv
-forge test --match-test testCreateInvoice -vvv
-```
-
-### Backend
-
-```bash
-cd backend
-npm run dev
-# Test endpoints with curl or Postman
-curl http://localhost:4000/health
-```
-
-### Integration Test
-
-```bash
-# 1. Deploy contract
-# 2. Start backend
-# 3. Create test invoice via API
-# 4. Verify on blockchain
-cast call $CONTRACT_ADDRESS "invoiceCount()" --rpc-url $TEMPO_RPC_URL
-```
-
-## 🐛 Troubleshooting
-
-### QuickBooks OAuth fails
-
-- Check redirect URI matches exactly
-- Verify Client ID/Secret are correct
-- Make sure using sandbox environment
-
-### Contract deployment fails
-
-- Ensure you have testnet funds
-- Check private key is correct
-- Verify RPC URL is accessible
-
-### Backend can't connect to contract
-
-- Verify CONTRACT_ADDRESS is set correctly
-- Check ABI file was copied
-- Ensure RPC URL is working
-
-## 📝 Roadmap
-
-### MVP (Hackathon - 48 hours)
-
-- [x] Smart contracts
-- [x] Backend API
-- [x] QuickBooks integration
-- [ ] Frontend (in progress)
-- [ ] Demo video
-
-### Post-Hackathon
-
-- [ ] Database for persistence
-- [ ] Real buyer wallet integration
-- [ ] Email notifications
-- [ ] Credit scoring
-- [ ] Insurance pool
-- [ ] Mobile app
-
-## 🏆 Hackathon Pitch
-
-**Problem**: Small businesses wait 30-90 days to get paid. Cash flow crisis.
-
-**Solution**: Instant liquidity marketplace. Sell your invoices, get cash now.
-
-**Why Tempo**: 
-- Instant settlement (vs 3-5 days traditional)
-- Sub-cent fees (vs 3-5% factoring fees)
-- Built-in reconciliation (memos)
-- Real QuickBooks integration (not a demo)
-
-**Market**: $3T invoice factoring market, 7M QuickBooks users
-
-**Business Model**: 0.5% platform fee = $500 on $100K invoice
-
-**Demo**: Live QuickBooks sync → Blockchain → Settlement
-
-## 🤝 Contributing
-
-This is a hackathon project! Feel free to fork and improve.
-
-## 📄 License
+## License
 
 MIT
-
-## 🙏 Acknowledgments
-
-- Tempo team for the blockchain
-- QuickBooks for the API
-- Privy for wallet infrastructure
-- OpenZeppelin for smart contract libraries
-
----
-
-**Built for [Hackathon Name]**
-**Team**: [Your Name]
-**Date**: February 2025
